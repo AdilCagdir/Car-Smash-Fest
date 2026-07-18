@@ -1,0 +1,619 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <title>Diamond Drive · 3 Levels (Fixed Freeze)</title>
+  <style>
+    body {
+      margin: 0;
+      overflow: hidden;
+      font-family: 'Segoe UI', system-ui, sans-serif;
+    }
+    #ui {
+      position: absolute;
+      top: 20px;
+      left: 20px;
+      color: white;
+      background: rgba(0,0,0,0.7);
+      padding: 12px 28px;
+      border-radius: 40px;
+      font-size: 1.4rem;
+      font-weight: bold;
+      backdrop-filter: blur(6px);
+      box-shadow: 0 4px 15px rgba(0,0,0,0.3);
+      pointer-events: none;
+      display: flex;
+      align-items: center;
+      gap: 15px;
+    }
+    #progressBarContainer {
+      width: 150px;
+      height: 16px;
+      background: rgba(255,255,255,0.2);
+      border-radius: 20px;
+      overflow: hidden;
+      border: 2px solid rgba(255,255,255,0.5);
+    }
+    #progressBarFill {
+      width: 0%;
+      height: 100%;
+      background: linear-gradient(90deg, #f1c40f, #f39c12);
+      transition: width 0.2s;
+    }
+    #levelDisplay {
+      position: absolute;
+      top: 20px;
+      right: 20px;
+      color: white;
+      background: rgba(0,0,0,0.7);
+      padding: 8px 20px;
+      border-radius: 20px;
+      font-weight: bold;
+      backdrop-filter: blur(4px);
+    }
+    #instruction {
+      position: absolute;
+      bottom: 30px;
+      left: 50%;
+      transform: translateX(-50%);
+      color: rgba(255,255,255,0.8);
+      background: rgba(0,0,0,0.6);
+      padding: 8px 24px;
+      border-radius: 20px;
+      font-size: 0.9rem;
+      backdrop-filter: blur(4px);
+    }
+    #messageOverlay {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      background: rgba(0,0,0,0.85);
+      color: white;
+      font-size: 2.5rem;
+      font-weight: bold;
+      padding: 25px 45px;
+      border-radius: 25px;
+      text-align: center;
+      backdrop-filter: blur(8px);
+      display: none;
+      z-index: 100;
+      border: 3px solid #f1c40f;
+    }
+    #restartBtn, #nextLevelBtn {
+      margin-top: 15px;
+      padding: 10px 30px;
+      font-size: 1.2rem;
+      background: #f1c40f;
+      border: none;
+      border-radius: 30px;
+      cursor: pointer;
+      font-weight: bold;
+    }
+    #nextLevelBtn {
+      background: #2ecc71;
+    }
+  </style>
+</head>
+<body>
+  <div id="ui">
+    <span>💎 <span id="score">0</span></span>
+    <div id="progressBarContainer">
+      <div id="progressBarFill"></div>
+    </div>
+    <span id="powerIndicator" style="font-size:0.9rem; color:#aaa;">⚡</span>
+  </div>
+  <div id="levelDisplay">🏁 Level <span id="levelNum">1</span></div>
+  <div id="instruction">🖱️ Hold left mouse button + move to steer</div>
+  <div id="messageOverlay">
+    <span id="messageText"></span>
+    <br>
+    <button id="nextLevelBtn" style="display:none;">▶ Next Level</button>
+    <button id="restartBtn">↺ Play Again</button>
+  </div>
+
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://unpkg.com/three@0.128.0/build/three.module.js",
+        "three/addons/": "https://unpkg.com/three@0.128.0/examples/jsm/"
+      }
+    }
+  </script>
+
+  <script type="module">
+    import * as THREE from 'three';
+
+    // ---------- SCENE ----------
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x1a1a2e);
+    scene.fog = new THREE.Fog(0x1a1a2e, 30, 80);
+
+    const camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 0.5, 200);
+    camera.position.set(0, 12, 18);
+    camera.lookAt(0, 0.5, -5);
+
+    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.shadowMap.enabled = true;
+    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    document.body.appendChild(renderer.domElement);
+
+    // ---------- LIGHTS ----------
+    const ambient = new THREE.AmbientLight(0x404066);
+    scene.add(ambient);
+    const dirLight = new THREE.DirectionalLight(0xffeedd, 1.1);
+    dirLight.position.set(10, 25, 5);
+    dirLight.castShadow = true;
+    dirLight.shadow.mapSize.width = 1024;
+    dirLight.shadow.mapSize.height = 1024;
+    dirLight.shadow.camera.near = 1;
+    dirLight.shadow.camera.far = 60;
+    dirLight.shadow.camera.left = -25;
+    dirLight.shadow.camera.right = 25;
+    dirLight.shadow.camera.top = 25;
+    dirLight.shadow.camera.bottom = -15;
+    scene.add(dirLight);
+
+    // ---------- ROAD (permanent) ----------
+    const roadLength = 30;
+    const roadWidth = 12;
+    const segmentCount = 5;
+    const roadMaterial = new THREE.MeshStandardMaterial({ color: 0x2c3e50, roughness: 0.8, metalness: 0.2 });
+    const lineMaterial = new THREE.MeshStandardMaterial({ color: 0xf1c40f, roughness: 0.5, emissive: new THREE.Color(0x221100) });
+
+    const permanentMovingParts = [];
+
+    for (let i = 0; i < segmentCount; i++) {
+      const segment = new THREE.Mesh(new THREE.PlaneGeometry(roadWidth, roadLength), roadMaterial);
+      segment.rotation.x = -Math.PI / 2;
+      segment.position.z = -i * roadLength;
+      segment.receiveShadow = true;
+      scene.add(segment);
+      permanentMovingParts.push(segment);
+
+      const line = new THREE.Mesh(new THREE.PlaneGeometry(0.3, roadLength * 0.6), lineMaterial);
+      line.rotation.x = -Math.PI / 2;
+      line.position.y = 0.02;
+      line.position.z = segment.position.z;
+      line.receiveShadow = true;
+      scene.add(line);
+      permanentMovingParts.push(line);
+    }
+
+    const barrierMat = new THREE.MeshStandardMaterial({ color: 0xe74c3c, emissive: new THREE.Color(0x330000), roughness: 0.4 });
+    for (let i = 0; i < segmentCount; i++) {
+      const leftBarrier = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.4, roadLength), barrierMat);
+      leftBarrier.position.set(-roadWidth/2 - 0.2, 0.2, -i * roadLength);
+      leftBarrier.castShadow = true;
+      leftBarrier.receiveShadow = true;
+      scene.add(leftBarrier);
+      permanentMovingParts.push(leftBarrier);
+      
+      const rightBarrier = leftBarrier.clone();
+      rightBarrier.position.x = roadWidth/2 + 0.2;
+      scene.add(rightBarrier);
+      permanentMovingParts.push(rightBarrier);
+    }
+
+    // ---------- CAR ----------
+    const car = new THREE.Group();
+    car.position.set(0, 0.45, 0);
+
+    const bodyGeo = new THREE.BoxGeometry(1.8, 0.6, 3.5);
+    const bodyMat = new THREE.MeshStandardMaterial({ color: 0xe67e22, roughness: 0.2, metalness: 0.6 });
+    const body = new THREE.Mesh(bodyGeo, bodyMat);
+    body.position.y = 0.3;
+    body.castShadow = true;
+    body.receiveShadow = true;
+    car.add(body);
+
+    const cabinGeo = new THREE.BoxGeometry(1.4, 0.4, 1.8);
+    const cabinMat = new THREE.MeshStandardMaterial({ color: 0x3498db, roughness: 0.1, metalness: 0.3, emissive: new THREE.Color(0x001122) });
+    const cabin = new THREE.Mesh(cabinGeo, cabinMat);
+    cabin.position.set(0, 0.7, -0.3);
+    cabin.castShadow = true;
+    cabin.receiveShadow = true;
+    car.add(cabin);
+
+    function createWheel(posX, posZ) {
+      const wheelGroup = new THREE.Group();
+      const wheelGeo = new THREE.CylinderGeometry(0.45, 0.45, 0.4, 24);
+      const wheelMat = new THREE.MeshStandardMaterial({ color: 0x111111, roughness: 0.7 });
+      const wheel = new THREE.Mesh(wheelGeo, wheelMat);
+      wheel.rotation.z = Math.PI / 2;
+      wheel.castShadow = true;
+      wheel.receiveShadow = true;
+      wheelGroup.add(wheel);
+      wheelGroup.position.set(posX, 0.35, posZ);
+      return wheelGroup;
+    }
+    car.add(createWheel(-1.1, 1.2));
+    car.add(createWheel(1.1, 1.2));
+    car.add(createWheel(-1.1, -1.2));
+    car.add(createWheel(1.1, -1.2));
+    scene.add(car);
+
+    // ---------- GAME STATE ----------
+    const carSpeed = 22;
+    const maxSteerX = roadWidth/2 - 1.2;
+    let targetCarX = 0;
+    let score = 0;
+    let particlesActive = false;
+    let gameActive = true;
+    let elapsedTime = 0;
+    let wallSpawned = false;
+    let wall = null;
+    let level = 1;
+    let invertedControls = false;
+
+    let diamonds = [];
+    let obstacles = [];
+    let balls = [];
+    let gates = [];
+    let spawnedObjects = []; // diamonds, obstacles, gates, wall (objects that scroll automatically)
+
+    const diamondGeo = new THREE.OctahedronGeometry(0.7);
+    const obstacleGeo = new THREE.BoxGeometry(1.0, 0.8, 1.0);
+    const ballGeo = new THREE.SphereGeometry(0.6, 16, 16);
+    const gateGeo = new THREE.BoxGeometry(6, 2, 0.3);
+
+    const scoreElement = document.getElementById('score');
+    const progressFill = document.getElementById('progressBarFill');
+    const powerIndicator = document.getElementById('powerIndicator');
+    const levelNum = document.getElementById('levelNum');
+    const messageOverlay = document.getElementById('messageOverlay');
+    const messageText = document.getElementById('messageText');
+    const restartBtn = document.getElementById('restartBtn');
+    const nextLevelBtn = document.getElementById('nextLevelBtn');
+
+    // ---------- MAGIC PARTICLES ----------
+    const particleGroup = new THREE.Group();
+    scene.add(particleGroup);
+    for (let i = 0; i < 20; i++) {
+      const geom = new THREE.SphereGeometry(0.12, 4, 4);
+      const mat = new THREE.MeshBasicMaterial({ color: new THREE.Color(`hsl(${i * 18}, 100%, 70%)`) });
+      const particle = new THREE.Mesh(geom, mat);
+      particle.position.set((Math.random() - 0.5) * 2.5, Math.random() * 2.5, (Math.random() - 0.5) * 2.5);
+      particleGroup.add(particle);
+    }
+    particleGroup.visible = false;
+
+    function updateParticles() {
+      if (!particlesActive) return;
+      particleGroup.position.copy(car.position);
+      particleGroup.children.forEach((p, i) => {
+        const angle = Date.now() * 0.005 + i * 0.5;
+        p.position.x = Math.sin(angle) * 1.8;
+        p.position.z = Math.cos(angle) * 1.8;
+        p.position.y = 0.8 + Math.sin(angle * 2) * 0.5;
+      });
+    }
+
+    function activatePower() {
+      particlesActive = true;
+      particleGroup.visible = true;
+      powerIndicator.textContent = '✨ POWER!';
+      powerIndicator.style.color = '#f1c40f';
+    }
+
+    function deactivatePower() {
+      particlesActive = false;
+      particleGroup.visible = false;
+      powerIndicator.textContent = '⚡';
+      powerIndicator.style.color = '#aaa';
+    }
+
+    function updateProgressBar() {
+      const percent = Math.min((score / 15) * 100, 100);
+      progressFill.style.width = percent + '%';
+      if (score >= 15 && !particlesActive) activatePower();
+    }
+
+    // ---------- SPAWN HELPERS ----------
+    function getRandomSpreadZ() {
+      return -15 - Math.random() * 75;
+    }
+
+    function spawnDiamond(zPosition = null) {
+      if (!zPosition) zPosition = getRandomSpreadZ();
+      const color = new THREE.Color(`hsl(${Math.random() * 360}, 80%, 60%)`);
+      const mat = new THREE.MeshStandardMaterial({ color, roughness: 0.1, metalness: 0.5, emissive: color.clone().multiplyScalar(0.4) });
+      const diamond = new THREE.Mesh(diamondGeo, mat);
+      diamond.position.set((Math.random() - 0.5) * (roadWidth - 2.5), 0.9, zPosition);
+      diamond.castShadow = true;
+      diamond.receiveShadow = true;
+      scene.add(diamond);
+      diamonds.push(diamond);
+      spawnedObjects.push(diamond);
+    }
+
+    function spawnObstacle(zPosition = null) {
+      if (!zPosition) zPosition = getRandomSpreadZ();
+      const mat = new THREE.MeshStandardMaterial({ color: 0x7f8c8d, roughness: 0.4, metalness: 0.9 });
+      const obstacle = new THREE.Mesh(obstacleGeo, mat);
+      obstacle.position.set((Math.random() - 0.5) * (roadWidth - 2.5), 0.5, zPosition);
+      obstacle.castShadow = true;
+      obstacle.receiveShadow = true;
+      scene.add(obstacle);
+      obstacles.push(obstacle);
+      spawnedObjects.push(obstacle);
+    }
+
+    function spawnBall(zPosition = null) {
+      if (!zPosition) zPosition = getRandomSpreadZ();
+      const mat = new THREE.MeshStandardMaterial({ color: 0xf1c40f, roughness: 0.2, metalness: 0.3 });
+      const ball = new THREE.Mesh(ballGeo, mat);
+      ball.position.set((Math.random() - 0.5) * (roadWidth - 2), 0.6, zPosition);
+      ball.castShadow = true;
+      ball.receiveShadow = true;
+      scene.add(ball);
+      balls.push({ mesh: ball, velocity: new THREE.Vector3(0, 0, 0) });
+    }
+
+    function spawnGate(zPosition = null) {
+      if (!zPosition) zPosition = getRandomSpreadZ();
+      const mat = new THREE.MeshStandardMaterial({ color: 0x9b59b6, emissive: new THREE.Color(0x220022), roughness: 0.4 });
+      const gate = new THREE.Mesh(gateGeo, mat);
+      gate.position.set(0, 1.2, zPosition);
+      gate.castShadow = true;
+      gate.receiveShadow = true;
+      scene.add(gate);
+      gates.push({ mesh: gate, triggered: false });
+      spawnedObjects.push(gate);
+    }
+
+    function populateInitialObjects() {
+      for (let i = 0; i < 8; i++) {
+        const z = -5 - i * 10;
+        if (Math.random() < 0.7) spawnDiamond(z);
+        else spawnObstacle(z);
+      }
+      if (level >= 2) {
+        for (let i = 0; i < 3; i++) spawnBall(-10 - i * 15);
+      }
+      if (level >= 3) {
+        spawnGate(-20 - Math.random() * 40);
+      }
+    }
+
+    function clearAllSpawnedObjects() {
+      [...diamonds, ...obstacles, ...balls.map(b => b.mesh), ...gates.map(g => g.mesh)].forEach(obj => scene.remove(obj));
+      if (wall) scene.remove(wall);
+      diamonds = [];
+      obstacles = [];
+      balls = [];
+      gates = [];
+      spawnedObjects = [];
+      wall = null;
+      wallSpawned = false;
+    }
+
+    // ---------- END GAME / RESTART ----------
+    function endGame(message, won = false) {
+      if (!gameActive) return; // already ended
+      gameActive = false;
+      messageText.textContent = message;
+      messageOverlay.style.display = 'block';
+      nextLevelBtn.style.display = (won && level < 3) ? 'inline-block' : 'none';
+    }
+
+    function nextLevel() {
+      level++;
+      if (level > 3) level = 3;
+      resetLevel();
+    }
+
+    function resetLevel() {
+      clearAllSpawnedObjects();
+      score = 0;
+      particlesActive = false;
+      gameActive = true;
+      elapsedTime = 0;
+      targetCarX = 0;
+      car.position.x = 0;
+      invertedControls = false;
+      deactivatePower();
+      updateProgressBar();
+      scoreElement.textContent = '0';
+      levelNum.textContent = level;
+      messageOverlay.style.display = 'none';
+      populateInitialObjects();
+    }
+
+    restartBtn.addEventListener('click', resetLevel);
+    nextLevelBtn.addEventListener('click', nextLevel);
+
+    // ---------- MOUSE / TOUCH ----------
+    let isMouseDown = false;
+    let lastMouseX = 0;
+    const steerSensitivity = 0.015;
+
+    window.addEventListener('mousedown', (e) => {
+      if (e.button === 0 && gameActive) {
+        isMouseDown = true;
+        lastMouseX = e.clientX;
+        e.preventDefault();
+      }
+    });
+    window.addEventListener('mouseup', () => { isMouseDown = false; });
+    window.addEventListener('mousemove', (e) => {
+      if (isMouseDown && gameActive) {
+        let deltaX = e.clientX - lastMouseX;
+        if (invertedControls) deltaX *= -1;
+        targetCarX += deltaX * steerSensitivity;
+        targetCarX = Math.max(-maxSteerX, Math.min(maxSteerX, targetCarX));
+        lastMouseX = e.clientX;
+      }
+    });
+    renderer.domElement.addEventListener('contextmenu', e => e.preventDefault());
+
+    window.addEventListener('touchstart', (e) => {
+      if (e.touches.length === 1 && gameActive) {
+        isMouseDown = true;
+        lastMouseX = e.touches[0].clientX;
+        e.preventDefault();
+      }
+    });
+    window.addEventListener('touchend', () => { isMouseDown = false; });
+    window.addEventListener('touchmove', (e) => {
+      if (isMouseDown && e.touches.length === 1 && gameActive) {
+        let deltaX = e.touches[0].clientX - lastMouseX;
+        if (invertedControls) deltaX *= -1;
+        targetCarX += deltaX * steerSensitivity;
+        targetCarX = Math.max(-maxSteerX, Math.min(maxSteerX, targetCarX));
+        lastMouseX = e.touches[0].clientX;
+        e.preventDefault();
+      }
+    }, { passive: false });
+
+    // ---------- ANIMATION LOOP (no early exits) ----------
+    const clock = new THREE.Clock();
+
+    function animate() {
+      const delta = Math.min(clock.getDelta(), 0.1);
+
+      if (gameActive) {
+        elapsedTime += delta;
+
+        car.position.x += (targetCarX - car.position.x) * Math.min(delta * 8, 1);
+
+        // Move permanent road parts
+        permanentMovingParts.forEach(obj => {
+          obj.position.z += carSpeed * delta;
+          if (obj.position.z > roadLength * 0.8) obj.position.z -= segmentCount * roadLength;
+        });
+
+        // Move spawned objects (diamonds, obstacles, gates, wall)
+        spawnedObjects.forEach(obj => {
+          obj.position.z += carSpeed * delta;
+          if (obj.position.z > roadLength * 0.8) obj.position.z -= segmentCount * roadLength;
+        });
+
+        // Balls (manual movement)
+        for (let i = balls.length - 1; i >= 0; i--) {
+          const ballObj = balls[i];
+          const b = ballObj.mesh;
+          b.position.z += carSpeed * delta;
+          b.position.x += ballObj.velocity.x * delta;
+          b.position.z += ballObj.velocity.z * delta;
+
+          if (b.position.x < -maxSteerX + 0.5) { b.position.x = -maxSteerX + 0.5; ballObj.velocity.x *= -0.7; }
+          else if (b.position.x > maxSteerX - 0.5) { b.position.x = maxSteerX - 0.5; ballObj.velocity.x *= -0.7; }
+
+          if (b.position.z > 15) {
+            scene.remove(b);
+            balls.splice(i, 1);
+            continue;
+          }
+
+          if (car.position.distanceTo(b.position) < 2.2) {
+            const dir = new THREE.Vector3().subVectors(b.position, car.position).normalize();
+            ballObj.velocity.copy(dir.multiplyScalar(8));
+          }
+
+          for (let j = diamonds.length - 1; j >= 0; j--) {
+            const dia = diamonds[j];
+            if (b.position.distanceTo(dia.position) < 1.5) {
+              scene.remove(dia);
+              diamonds.splice(j, 1);
+              spawnedObjects = spawnedObjects.filter(obj => obj !== dia);
+              score++;
+              scoreElement.textContent = score;
+              updateProgressBar();
+              scene.remove(b);
+              balls.splice(i, 1);
+              break;
+            }
+          }
+        }
+
+        // Diamond collection by car
+        for (let i = diamonds.length - 1; i >= 0; i--) {
+          const dia = diamonds[i];
+          if (car.position.distanceTo(dia.position) < 2.0) {
+            scene.remove(dia);
+            diamonds.splice(i, 1);
+            spawnedObjects = spawnedObjects.filter(obj => obj !== dia);
+            score++;
+            scoreElement.textContent = score;
+            updateProgressBar();
+          }
+        }
+
+        // Obstacle collision
+        for (let obs of obstacles) {
+          if (car.position.distanceTo(obs.position) < 1.8) {
+            endGame('💥 Crash! You hit a roadblock.');
+            break; // break loop, but continue animate
+          }
+        }
+
+        // Gates
+        if (level >= 3) {
+          gates.forEach(gateObj => {
+            const gate = gateObj.mesh;
+            if (!gateObj.triggered && Math.abs(car.position.z - gate.position.z) < 1.5 && Math.abs(car.position.x - gate.position.x) < 3) {
+              invertedControls = !invertedControls;
+              gateObj.triggered = true;
+              gate.material.color.setHex(0xe67e22);
+            }
+          });
+        }
+
+        // Wall spawn at 15s
+        if (elapsedTime >= 15 && !wallSpawned) {
+          wallSpawned = true;
+          const wallGeo = new THREE.BoxGeometry(roadWidth, 2.5, 1.5);
+          const wallMat = new THREE.MeshStandardMaterial({ color: 0x34495e, roughness: 0.6, metalness: 0.8 });
+          wall = new THREE.Mesh(wallGeo, wallMat);
+          wall.position.set(0, 1.25, - (segmentCount * roadLength) - 10);
+          wall.castShadow = true;
+          wall.receiveShadow = true;
+          scene.add(wall);
+          spawnedObjects.push(wall);
+        }
+
+        // Wall collision
+        if (wall && car.position.distanceTo(wall.position) < 3.5) {
+          if (particlesActive) endGame('🏆 Victory!', true);
+          else endGame('🧱 You crashed into the wall. Collect 15 diamonds first!');
+          // no return, just keep running (gameActive now false)
+        }
+
+        // Maintain object counts after 2s
+        if (elapsedTime > 2) {
+          while (diamonds.length < 10) spawnDiamond();
+          while (obstacles.length < 5) spawnObstacle();
+          if (level >= 2 && balls.length < 4) spawnBall();
+          if (level >= 3 && gates.length < 2) spawnGate();
+        }
+
+        updateParticles();
+      }
+
+      // Camera always updates (even if game ended, we still render the scene)
+      const camX = car.position.x * 0.7;
+      camera.position.x += (camX - camera.position.x) * 0.1;
+      camera.position.z = car.position.z + 18;
+      camera.position.y = 11;
+      camera.lookAt(car.position.x, 0.8, car.position.z - 4);
+
+      renderer.render(scene, camera);
+      requestAnimationFrame(animate);
+    }
+
+    // Start
+    resetLevel();
+    animate();
+
+    window.addEventListener('resize', () => {
+      camera.aspect = window.innerWidth / window.innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(window.innerWidth, window.innerHeight);
+    });
+  </script>
+</body>
+</html>
