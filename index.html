@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-  <title>Diamond Drive · 3 Levels (Fixed Freeze)</title>
+  <title>Diamond Drive · 3 Levels (Big Splinters)</title>
   <style>
     body {
       margin: 0;
@@ -98,7 +98,7 @@
 </head>
 <body>
   <div id="ui">
-    <span>💎 <span id="score">0</span></span>
+    <span>📦 <span id="score">0</span></span>
     <div id="progressBarContainer">
       <div id="progressBarFill"></div>
     </div>
@@ -249,13 +249,14 @@
     let level = 1;
     let invertedControls = false;
 
-    let diamonds = [];
+    let crates = [];
     let obstacles = [];
     let balls = [];
     let gates = [];
-    let spawnedObjects = []; // diamonds, obstacles, gates, wall (objects that scroll automatically)
+    let spawnedObjects = [];
+    let splinters = [];
 
-    const diamondGeo = new THREE.OctahedronGeometry(0.7);
+    const crateGeo = new THREE.BoxGeometry(0.9, 0.8, 0.9);
     const obstacleGeo = new THREE.BoxGeometry(1.0, 0.8, 1.0);
     const ballGeo = new THREE.SphereGeometry(0.6, 16, 16);
     const gateGeo = new THREE.BoxGeometry(6, 2, 0.3);
@@ -317,17 +318,19 @@
       return -15 - Math.random() * 75;
     }
 
-    function spawnDiamond(zPosition = null) {
+    const crateColors = [0xA0522D, 0x8B4513, 0xCD853F, 0xD2691E, 0xF4A460];
+
+    function spawnCrate(zPosition = null) {
       if (!zPosition) zPosition = getRandomSpreadZ();
-      const color = new THREE.Color(`hsl(${Math.random() * 360}, 80%, 60%)`);
-      const mat = new THREE.MeshStandardMaterial({ color, roughness: 0.1, metalness: 0.5, emissive: color.clone().multiplyScalar(0.4) });
-      const diamond = new THREE.Mesh(diamondGeo, mat);
-      diamond.position.set((Math.random() - 0.5) * (roadWidth - 2.5), 0.9, zPosition);
-      diamond.castShadow = true;
-      diamond.receiveShadow = true;
-      scene.add(diamond);
-      diamonds.push(diamond);
-      spawnedObjects.push(diamond);
+      const color = crateColors[Math.floor(Math.random() * crateColors.length)];
+      const mat = new THREE.MeshStandardMaterial({ color: color, roughness: 0.8, metalness: 0.1 });
+      const crate = new THREE.Mesh(crateGeo, mat);
+      crate.position.set((Math.random() - 0.5) * (roadWidth - 2.5), 0.5, zPosition);
+      crate.castShadow = true;
+      crate.receiveShadow = true;
+      scene.add(crate);
+      crates.push(crate);
+      spawnedObjects.push(crate);
     }
 
     function spawnObstacle(zPosition = null) {
@@ -368,7 +371,7 @@
     function populateInitialObjects() {
       for (let i = 0; i < 8; i++) {
         const z = -5 - i * 10;
-        if (Math.random() < 0.7) spawnDiamond(z);
+        if (Math.random() < 0.7) spawnCrate(z);
         else spawnObstacle(z);
       }
       if (level >= 2) {
@@ -379,21 +382,78 @@
       }
     }
 
+    // BIGGER SPLINTERS
+    function createSplinterEffect(position) {
+      const splinterCount = 12;
+      const group = new THREE.Group();
+      // Larger splinter geometry
+      const splinterGeo = new THREE.BoxGeometry(0.35, 0.15, 0.35);
+      const woodMat = new THREE.MeshStandardMaterial({ color: 0x8B4513, roughness: 0.9 });
+      
+      for (let i = 0; i < splinterCount; i++) {
+        const splinter = new THREE.Mesh(splinterGeo, woodMat);
+        splinter.position.set((Math.random() - 0.5) * 0.8, (Math.random() - 0.5) * 0.8, (Math.random() - 0.5) * 0.8);
+        splinter.castShadow = true;
+        const velocity = new THREE.Vector3(
+          (Math.random() - 0.5) * 6,
+          Math.random() * 5 + 2,
+          (Math.random() - 0.5) * 6
+        );
+        group.add(splinter);
+        splinter.userData.velocity = velocity;
+      }
+      group.position.copy(position);
+      scene.add(group);
+      splinters.push({ group, time: 0 });
+    }
+
+    function updateSplinters(delta) {
+      for (let i = splinters.length - 1; i >= 0; i--) {
+        const s = splinters[i];
+        s.time += delta;
+        if (s.time > 0.8) {
+          scene.remove(s.group);
+          splinters.splice(i, 1);
+        } else {
+          s.group.children.forEach(child => {
+            child.position.x += child.userData.velocity.x * delta;
+            child.position.y += child.userData.velocity.y * delta;
+            child.position.z += child.userData.velocity.z * delta;
+            child.userData.velocity.y -= 9.8 * delta;
+            child.rotation.x += delta * 10;
+            child.rotation.y += delta * 12;
+          });
+        }
+      }
+    }
+
+    function collectCrate(crate) {
+      scene.remove(crate);
+      const index = crates.indexOf(crate);
+      if (index > -1) crates.splice(index, 1);
+      spawnedObjects = spawnedObjects.filter(obj => obj !== crate);
+      createSplinterEffect(crate.position.clone());
+      score++;
+      scoreElement.textContent = score;
+      updateProgressBar();
+    }
+
     function clearAllSpawnedObjects() {
-      [...diamonds, ...obstacles, ...balls.map(b => b.mesh), ...gates.map(g => g.mesh)].forEach(obj => scene.remove(obj));
+      [...crates, ...obstacles, ...balls.map(b => b.mesh), ...gates.map(g => g.mesh)].forEach(obj => scene.remove(obj));
       if (wall) scene.remove(wall);
-      diamonds = [];
+      crates = [];
       obstacles = [];
       balls = [];
       gates = [];
       spawnedObjects = [];
+      splinters.forEach(s => scene.remove(s.group));
+      splinters = [];
       wall = null;
       wallSpawned = false;
     }
 
-    // ---------- END GAME / RESTART ----------
     function endGame(message, won = false) {
-      if (!gameActive) return; // already ended
+      if (!gameActive) return;
       gameActive = false;
       messageText.textContent = message;
       messageOverlay.style.display = 'block';
@@ -469,7 +529,7 @@
       }
     }, { passive: false });
 
-    // ---------- ANIMATION LOOP (no early exits) ----------
+    // ---------- ANIMATION LOOP ----------
     const clock = new THREE.Clock();
 
     function animate() {
@@ -480,19 +540,16 @@
 
         car.position.x += (targetCarX - car.position.x) * Math.min(delta * 8, 1);
 
-        // Move permanent road parts
         permanentMovingParts.forEach(obj => {
           obj.position.z += carSpeed * delta;
           if (obj.position.z > roadLength * 0.8) obj.position.z -= segmentCount * roadLength;
         });
 
-        // Move spawned objects (diamonds, obstacles, gates, wall)
         spawnedObjects.forEach(obj => {
           obj.position.z += carSpeed * delta;
           if (obj.position.z > roadLength * 0.8) obj.position.z -= segmentCount * roadLength;
         });
 
-        // Balls (manual movement)
         for (let i = balls.length - 1; i >= 0; i--) {
           const ballObj = balls[i];
           const b = ballObj.mesh;
@@ -514,15 +571,10 @@
             ballObj.velocity.copy(dir.multiplyScalar(8));
           }
 
-          for (let j = diamonds.length - 1; j >= 0; j--) {
-            const dia = diamonds[j];
-            if (b.position.distanceTo(dia.position) < 1.5) {
-              scene.remove(dia);
-              diamonds.splice(j, 1);
-              spawnedObjects = spawnedObjects.filter(obj => obj !== dia);
-              score++;
-              scoreElement.textContent = score;
-              updateProgressBar();
+          for (let j = crates.length - 1; j >= 0; j--) {
+            const crate = crates[j];
+            if (b.position.distanceTo(crate.position) < 1.5) {
+              collectCrate(crate);
               scene.remove(b);
               balls.splice(i, 1);
               break;
@@ -530,28 +582,20 @@
           }
         }
 
-        // Diamond collection by car
-        for (let i = diamonds.length - 1; i >= 0; i--) {
-          const dia = diamonds[i];
-          if (car.position.distanceTo(dia.position) < 2.0) {
-            scene.remove(dia);
-            diamonds.splice(i, 1);
-            spawnedObjects = spawnedObjects.filter(obj => obj !== dia);
-            score++;
-            scoreElement.textContent = score;
-            updateProgressBar();
+        for (let i = crates.length - 1; i >= 0; i--) {
+          const crate = crates[i];
+          if (car.position.distanceTo(crate.position) < 2.0) {
+            collectCrate(crate);
           }
         }
 
-        // Obstacle collision
         for (let obs of obstacles) {
           if (car.position.distanceTo(obs.position) < 1.8) {
             endGame('💥 Crash! You hit a roadblock.');
-            break; // break loop, but continue animate
+            break;
           }
         }
 
-        // Gates
         if (level >= 3) {
           gates.forEach(gateObj => {
             const gate = gateObj.mesh;
@@ -563,7 +607,6 @@
           });
         }
 
-        // Wall spawn at 15s
         if (elapsedTime >= 15 && !wallSpawned) {
           wallSpawned = true;
           const wallGeo = new THREE.BoxGeometry(roadWidth, 2.5, 1.5);
@@ -576,16 +619,13 @@
           spawnedObjects.push(wall);
         }
 
-        // Wall collision
         if (wall && car.position.distanceTo(wall.position) < 3.5) {
           if (particlesActive) endGame('🏆 Victory!', true);
-          else endGame('🧱 You crashed into the wall. Collect 15 diamonds first!');
-          // no return, just keep running (gameActive now false)
+          else endGame('🧱 You crashed into the wall. Collect 15 crates first!');
         }
 
-        // Maintain object counts after 2s
         if (elapsedTime > 2) {
-          while (diamonds.length < 10) spawnDiamond();
+          while (crates.length < 10) spawnCrate();
           while (obstacles.length < 5) spawnObstacle();
           if (level >= 2 && balls.length < 4) spawnBall();
           if (level >= 3 && gates.length < 2) spawnGate();
@@ -594,7 +634,8 @@
         updateParticles();
       }
 
-      // Camera always updates (even if game ended, we still render the scene)
+      updateSplinters(delta);
+
       const camX = car.position.x * 0.7;
       camera.position.x += (camX - camera.position.x) * 0.1;
       camera.position.z = car.position.z + 18;
@@ -605,7 +646,6 @@
       requestAnimationFrame(animate);
     }
 
-    // Start
     resetLevel();
     animate();
 
